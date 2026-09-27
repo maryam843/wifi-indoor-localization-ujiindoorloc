@@ -6,7 +6,7 @@
 - A phone's WiFi scan lists how strongly it hears each access point. Each spot in a building has its own pattern, like a fingerprint.
 - Input: one WiFi scan (signal strength from up to 520 access points). Output: the building, the floor, and the position in metres.
 - On a separate test set recorded about 4 months after the training data, all models except the simplest baseline get the building right in 99.7–100% of
-  scans, and the floor in about 90–92%. The typical (median) position error is 5.4 m.
+  scans, and the floor in about 90–92%. The typical (median) position error is 5.4 m in the dataset's map units (about 4.2 m on the ground).
 - The simplest method, "find the most similar known scan" (k-nearest neighbours), gave the best position accuracy.
 - This kind of system is used for indoor navigation, finding people in emergencies, and tracking equipment in large buildings.
 
@@ -53,8 +53,9 @@ classifiers for building and floor, and a Random Forest and a Keras neural netwo
 - The official `validationData.csv` is the **final test set**. It is used in one section of the notebook, and each final
   model is scored on it exactly once. Keras early stopping uses a split of the training data only.
 - Position error is the straight-line (2-D) distance between the true and predicted point. It is in the dataset's own units,
-  as in other work on this dataset. The coordinates are Web Mercator; the notebook computes a scale factor of 1.305 at this
-  latitude, so 1 dataset metre ≈ 0.766 metres on the ground. **The errors below are not converted.**
+  as in other work on this dataset. The coordinates are Web Mercator (EPSG:3857-like) metres; the notebook computes a scale
+  factor of 1.305 at this latitude, so ground distances ≈ 0.766 × these values. The main position table uses dataset units;
+  a second table gives approximate ground metres.
 
 ## Results
 
@@ -81,27 +82,40 @@ All numbers come from the executed notebook [`02_corrected_version.ipynb`](noteb
 | XGBoost (tuned) | 0.9037 | 0.8917 | 0.9037 | 0.9733 |
 | Keras MLP (selected by group CV) | 0.9190 | 0.9100 | 0.9190 | 0.9816 |
 
-**Position** (error in metres, dataset units)
+**Position** (error in metres, dataset units = Web Mercator metres)
 
 | Model | Mean | Median | 75th pct | 90th pct | Group-CV mean (train) |
 |---|---|---|---|---|---|
 | Mean position (baseline) | 142.75 | 167.37 | 193.37 | 217.10 | 129.98 |
-| kNN, k = 4 (baseline) | **8.72** | **5.43** | **10.46** | **18.76** | 8.45 |
-| Random Forest (selected by group CV) | 10.43 | 7.65 | 13.52 | 22.38 | 8.66 |
+| **kNN, k = 4 (baseline) — final position model** | **8.72** | **5.43** | **10.46** | **18.76** | **8.45** |
+| Random Forest (auto-selected, non-baselines only) | 10.43 | 7.65 | 13.52 | 22.38 | 8.66 |
 | Keras MLP | 12.26 | 10.17 | 15.44 | 23.27 | 9.87 |
+
+**Position, ≈ ground metres** (dataset values ÷ 1.305, the scale factor printed by the notebook)
+
+| Model | Mean | Median | 75th pct | 90th pct | Group-CV mean (train) |
+|---|---|---|---|---|---|
+| Mean position (baseline) | ≈ 109.39 | ≈ 128.26 | ≈ 148.18 | ≈ 166.36 | ≈ 99.60 |
+| **kNN, k = 4 (baseline) — final position model** | **≈ 6.68** | **≈ 4.16** | **≈ 8.02** | **≈ 14.37** | **≈ 6.47** |
+| Random Forest | ≈ 7.99 | ≈ 5.86 | ≈ 10.36 | ≈ 17.15 | ≈ 6.64 |
+| Keras MLP | ≈ 9.39 | ≈ 7.79 | ≈ 11.83 | ≈ 17.83 | ≈ 7.56 |
+
+**The kNN baseline (k = 4) is the best position model**, both in group CV (8.45 m) and on the official validation set
+(mean 8.72 m, median 5.43 m), ahead of the Random Forest (10.43 m) and the Keras MLP (12.26 m). The notebook's automatic
+selection only compared non-baseline models, so it marked the Random Forest as "selected". I report kNN as the final
+position model.
 
 What I take from this:
 - Building prediction is basically solved by every model except the majority baseline.
 - For the floor, the models beat kNN by 0.7–2.3 percentage points. The Keras MLP is best (91.9%).
-- For position, **the kNN baseline is the best model**, in group CV and on the test set. My selection rule only compared
-  non-baseline models, so it picked the Random Forest. I report this rather than hide it.
+- For position, the simple kNN baseline beat every more complex model (see above).
 - Test scores are lower than group-CV scores (for example, floor 0.98 → 0.92 for the MLP). The test data was recorded
   about 4 months later, and signals change over time, which likely explains most of the gap.
 - XGBoost (tuned), which I focused on, was not better than the untuned Random Forest on this data.
 
-Best XGBoost settings from the random search (3-fold group CV; the same setting won for building and floor because both
-searches used the same seed and the building search's 10 candidates are the first 10 of the floor search's 20):
+Best XGBoost settings from the random search (3-fold group CV):
 `n_estimators=291, max_depth=6, learning_rate=0.2799, subsample=0.9969, colsample_bytree=0.2124, min_child_weight=2`.
+Both XGBoost searches (building and floor) used the same random seed, so they share this best setting.
 
 ### First version vs corrected version
 
@@ -114,9 +128,12 @@ searches used the same seed and the building search's 10 candidates are the firs
 | Position, Random Forest | RMSE 0.53 m (lat) / 0.68 m (long): **invalid, leakage** | mean 2-D error 10.43 m (median 7.65 m) |
 | Position, Keras MLP | RMSE 8.32 m (lat) / 7.97 m (long): **invalid, leakage** | mean 2-D error 12.26 m (median 10.17 m) |
 
+**Different test sets — not a like-for-like comparison.** The first version was scored on a random 80/20 split of the
+training file; the corrected version on the official validation set, recorded about 4 months later.
+
 The first-version numbers are copied from the saved outputs of the course notebook. After the fixes, floor accuracy went
-from about 81% (on an easier random split) to about 90–92% on the harder, later test set. The two numbers come from
-different test data, so this is not a like-for-like comparison. The main change is the "not detected" encoding.
+from about 81% (on an easier random split) to about 90–92% on the harder, later test set. The main change is the
+"not detected" encoding. The best corrected position model, kNN (not in the first version), reaches a mean error of 8.72 m.
 
 ## Figures
 
@@ -136,6 +153,11 @@ All models vs baselines on the official validation set:
 
 ![Model comparison](figures/model_comparison.png)
 
+Position errors in both figures are in dataset (Web Mercator) units.
+
+Cosmetic notes: Colab did not save execution counts in the notebook (the outputs are all there), and in `model_comparison.png`
+the value labels near 1.0 overlap the plot border. Neither affects any result.
+
 ## Limitations
 
 - One campus and one data collection campaign; the results may not transfer to other buildings.
@@ -145,7 +167,7 @@ All models vs baselines on the official validation set:
   building 2. The most common mistakes are floor 1 predicted as floor 2 (27 scans) or floor 0 (15 scans). 83 of the 90 wrong
   floor predictions are off by one floor.
 - Position error grows from building 0 (median 5.95 m) to building 1 (8.86 m) and building 2 (12.39 m) for the Random Forest.
-- Errors are in Web Mercator units, not ground metres (see "How I evaluated").
+- Errors are reported in Web Mercator units; ground metres are only approximate (÷ 1.305, see "How I evaluated").
 - A hierarchical model (building first, then floor, then position within that building) was not tried.
 - The notebook took 45.0 minutes on the free Colab CPU runtime, mostly the XGBoost random search.
 
@@ -155,12 +177,14 @@ All models vs baselines on the official validation set:
 - Missing values are not always "unknown". Here, "not detected" is real information, and filling it with the average destroyed it.
 - How you split the data matters as much as the model. Random splits of repeated measurements overstate accuracy, and a
   later, separate test set gives a more honest number.
-- Always compare with a simple baseline. Here kNN was hard to beat, and for position it was not beaten at all.
+- A simple, well-tuned baseline can beat more complex models. kNN with k chosen by group CV was hard to beat for floor,
+  and for position it beat both the Random Forest and the neural network. Always include one.
 
 ## How to run
 
 **Google Colab.** [Open in Colab](https://colab.research.google.com/github/maryam843/wifi-indoor-localization-ujiindoorloc/blob/main/notebooks/02_corrected_version.ipynb),
-then Runtime → Run all. The notebook downloads the data from UCI. It took 45.0 minutes on the free CPU runtime.
+then Runtime → Run all. The notebook downloads the data from UCI. It takes about 45 minutes on the free Colab CPU
+(mostly the XGBoost search).
 
 **Locally** (Python 3.10–3.13):
 
