@@ -1,0 +1,13 @@
+# data (download from UCI, see data/README.md)
+*.csv
+data/*.zip
+figures.zip
+
+# Python / Jupyter
+.ipynb_checkpoints/
+__pycache__/
+.venv/
+
+# never commit course documents
+*.docx
+*.pdf
