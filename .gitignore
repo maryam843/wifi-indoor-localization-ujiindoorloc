@@ -1,7 +1,8 @@
 # data (download from UCI, see data/README.md)
 *.csv
-data/*.zip
-figures.zip
+data/
+*.zip
+!results/group_folds.csv
 
 # Python / Jupyter
 .ipynb_checkpoints/
