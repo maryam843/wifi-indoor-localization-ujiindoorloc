@@ -1,5 +1,4 @@
-# Versions printed by the executed Colab run (notebooks/02_corrected_version.ipynb, cell 3);
-# matplotlib version read from the figure metadata written by that run.
+# Pinned versions. The notebook prints the installed versions in its imports cell.
 numpy==2.1.3
 pandas==2.2.3
 scipy==1.16.3
