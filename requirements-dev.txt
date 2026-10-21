@@ -1,0 +1,3 @@
+# Tools for the tests and lint checks (CI uses these too).
+pytest==9.1.1
+ruff==0.16.10
