@@ -2,7 +2,7 @@
 
 The CSV files are **not** stored in this repository.
 
-`notebooks/02_corrected_version.ipynb` downloads them automatically from:
+`notebooks/wifi_indoor_localization.ipynb` downloads them automatically from:
 https://archive.ics.uci.edu/static/public/310/ujiindoorloc.zip
 
 ## Manual download
