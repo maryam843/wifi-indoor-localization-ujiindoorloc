@@ -11,6 +11,6 @@ __pycache__/
 .ruff_cache/
 .venv/
 
-# never commit course documents
+# never commit private documents
 *.docx
 *.pdf
