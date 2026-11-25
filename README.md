@@ -1,217 +1,114 @@
-# WiFi indoor localization (UJIIndoorLoc)
+# WiFi Indoor Localization (UJIIndoorLoc)
+[![CI](https://github.com/maryam843/wifi-indoor-localization-ujiindoorloc/actions/workflows/ci.yml/badge.svg)](https://github.com/maryam843/wifi-indoor-localization-ujiindoorloc/actions/workflows/ci.yml)
 
-## Project in plain English
+Predicts the building, the floor and the position inside a building from one WiFi scan, using group cross-validation and one final test on 1,111 scans recorded about four months after the training data.
 
-- GPS does not work well inside buildings, but most buildings are full of WiFi access points.
-- A phone's WiFi scan lists how strongly it hears each access point. Each spot in a building has its own pattern, like a fingerprint.
-- Input: one WiFi scan (signal strength from up to 520 access points). Output: the building, the floor, and the position in metres.
-- On a separate test set recorded about 4 months after the training data, all models except the simplest baseline get the building right in 99.7–100% of
-  scans, and the floor in about 90–92%. The typical (median) position error is 5.4 m in the dataset's map units (about 4.2 m on the ground).
-- The simplest method, "find the most similar known scan" (k-nearest neighbours), gave the best position accuracy.
-- This kind of system is used for indoor navigation, finding people in emergencies, and tracking equipment in large buildings.
+## Key results
 
-This is a two-person course project (DSAI3201 Machine Learning, UDST, Winter 2025). In 2026 I reviewed it, found serious
-problems in our original version, and rebuilt the evaluation. Both versions are in this repo.
+All on the official validation file (1,111 scans), used once per final model.
+
+- **Floor:** the Keras MLP gets the floor right for 0.9190 of scans (1,021 of 1,111), against 0.8965 for a kNN baseline and 0.1548 for always guessing the most common floor. 83 of the 90 wrong floors are one floor off.
+- **Position:** the simple kNN baseline (k = 4) is the best position model: median error 5.43 units (about 4.2 m on the ground), mean 8.72 units, against 142.75 units for always predicting the mean position. It beat the Random Forest (mean 10.43) and the Keras MLP (mean 11.76).
+- **Building:** XGBoost gets 1,110 of 1,111 scans right (0.9991), against 0.2412 for the majority class. Every non-trivial model scores between 0.9973 and 1.0000.
+- **Gaps:** the tuned XGBoost was not better than the untuned Random Forest for floor (0.9037 vs 0.9091), and every floor and position model scores worse on the later test file than in group CV (floor, Keras MLP: 0.9766 in CV, 0.9190 on test).
+
+![Test-set building accuracy, floor accuracy and mean position error for each model, baselines in grey](figures/model_comparison.png)
+
+**Tools:** Python, pandas, NumPy, scikit-learn, XGBoost, TensorFlow, Keras, matplotlib, seaborn, Jupyter, pytest, GitHub Actions
 
 ## Data
 
-[UJIIndoorLoc](https://archive.ics.uci.edu/dataset/310/ujiindoorloc), UCI Machine Learning Repository, dataset #310. Licence: CC BY 4.0.
+[UJIIndoorLoc](https://archive.ics.uci.edu/dataset/310/ujiindoorloc), UCI Machine Learning Repository dataset #310, licence CC BY 4.0.
 
-- 3 buildings of Universitat Jaume I (Spain), 5 floor levels (floors 0–4), 520 WiFi access points.
-- Official split: `trainingData.csv` (19,937 scans) and `validationData.csv` (1,111 scans, recorded about 4 months later).
-- Signal strength (RSSI) goes from −104 dBm (weakest) to 0 dBm (strongest). The value 100 means "access point not detected".
+- Three buildings of Universitat Jaume I (Castellón, Spain), floors 0 to 4, 520 WiFi access points.
+- `trainingData.csv`: 19,937 scans x 529 columns (42.7 MB). `validationData.csv`: 1,111 scans (2.4 MB), recorded about four months later and used here as the test set.
+- Each scan holds the signal strength (RSSI) of every access point, from -104 dBm (weak) to 0 dBm (strong); the value 100 means "not detected" (96.5% of all training values).
+- Coordinates are Web Mercator metres ("units" below). At this latitude the scale factor is 1.305, so ground metres = units / 1.305.
 
-Torres-Sospedra, J., Montoliu, R., Martínez-Usó, A., Avariento, J. P., Arnau, T. J., Benedito-Bordonau, M., & Huerta, J. (2014).
-UJIIndoorLoc: A new multi-building and multi-floor database for WLAN fingerprint-based indoor localization problems.
-*2014 International Conference on Indoor Positioning and Indoor Navigation (IPIN)*, 261–270.
+The CSV files are not committed. The notebook downloads the zip from UCI on its first run; manual steps are in [data/README.md](data/README.md).
 
-The data is not stored in this repo. The notebook downloads it from UCI (details in [data/README.md](data/README.md)).
+## Approach
 
-## What we built in the course (2025)
-
-[`notebooks/01_original_course_version.ipynb`](notebooks/01_original_course_version.ipynb) is the notebook we submitted.
-Only personal details and outputs showing local paths were removed; it was not re-run. We trained Random Forest and XGBoost
-classifiers for building and floor, and a Random Forest and a Keras neural network for the coordinates, using a random
-80/20 split of the training file.
-
-## What was wrong in the first version and how I fixed it
-
-| Problem | Fix |
-|---|---|
-| **Leakage in the position models.** To predict latitude we gave the model the longitude (and the other way round), plus the timestamp, space ID, building ID and relative position. None of these are known when all you have is a WiFi scan, so the tiny errors (about 0.5 m) came from the model reading the answer from its inputs. The first version's position results are not valid. | The only inputs are the WiFi signal columns. Longitude and latitude are predicted together. |
-| **"Not detected" turned into "normal signal".** We correctly saw that 100 is not a real signal. But then we dropped 465 of the 520 access points (those missing in more than 90% of scans) and filled the remaining gaps with the median or mean. That erased most of the location information. | Keep every access point that is ever detected in training (465 of 520; 55 are never detected) and encode 100 as −105 dBm, just weaker than any real reading. No imputation. |
-| **Random split only.** Almost identical scans of the same spot ended up in both train and test, and the official validation file was never used. | Group cross-validation for all choices and a single final test on the official validation file (see below). |
-| **No baselines.** | Majority class, k-nearest neighbours (kNN) and "always predict the average position". |
-| **No tuning.** `GridSearchCV` was imported but never used, although our report said we tuned. | Random search for XGBoost (20 settings for floor, 10 for building) and a group-CV search over k for kNN. |
-| **Chart and code bugs:** swapped pie-chart labels (83% of scans were taken *outside* the room, in front of the door, not inside), a bar showing the wrong model, blank saved figures (`plt.show()` before `savefig`), a cell that only ran because of leftover variables, and the scaler fitted before the split. | Correct labels, charts built from the results table, figures saved before showing, a notebook that runs top to bottom, and a fixed signal transform inside sklearn Pipelines. |
-
-## How I evaluated
-
-- Every choice (k for kNN, XGBoost settings, which model counts as "selected") uses only `trainingData.csv`, with 5-fold
-  **group cross-validation**. A group is one reference location (building + floor + space; 735 groups), so all scans of a
-  spot are held out together.
-- The official `validationData.csv` is the **final test set**. It is used in one section of the notebook, and each final
-  model is scored on it exactly once. Keras early stopping uses a split of the training data only.
-- Position error is the straight-line (2-D) distance between the true and predicted point. It is in the dataset's own units,
-  as in other work on this dataset. The coordinates are Web Mercator (EPSG:3857-like) metres; the notebook computes a scale
-  factor of 1.305 at this latitude, so ground distances ≈ 0.766 × these values. The main position table uses dataset units;
-  a second table gives approximate ground metres.
+1. **Encode "not detected" as a signal, not a gap.** 100 becomes -105 dBm, just weaker than any real reading (`src/encoding.py`). Nothing is imputed, because not hearing an access point is location information.
+2. **Clean the training file only.** 637 exact duplicates and 73 empty scans are removed (19,227 rows left), and the 55 access points never heard in training are dropped, leaving 465 inputs. The test file keeps all 1,111 rows.
+3. **Use only the WiFi signals as inputs.** Timestamp, space ID, building ID, user, phone and the other coordinate are never inputs; longitude and latitude are predicted together.
+4. **Group cross-validation.** Scans of the same spot are near copies, so the 735 building-floor-space locations are kept whole in 5-fold group CV. `StableGroupKFold` (`src/folds.py`) gives the same folds on every machine; the fold table is saved in `results/group_folds.csv`.
+5. **Compare against baselines.** Majority class, mean position and kNN (k from 1 to 5) run beside a Random Forest, an XGBoost random search (10 candidates for building, 20 for floor, 3-fold group CV) and a Keras MLP, all with the same fixed 0 to 1 signal scaling (nothing is fitted on the data).
+6. **Select by group CV, baselines included.** For each task the model with the best group-CV score is chosen: XGBoost for building (0.9994), Keras MLP for floor (0.9766), kNN with k = 4 for position (8.46 units).
+7. **Test once.** Each final model is refit on all 19,227 training rows and scored once on the validation file (a `score_once` guard in the notebook), then the errors are broken down by building and floor.
 
 ## Results
 
-All numbers come from the executed notebook [`02_corrected_version.ipynb`](notebooks/02_corrected_version.ipynb)
-(section 7 for the test set, section 6 for group CV). Official validation set, 1,111 scans.
+Official validation file, 1,111 scans. Bold = model selected by group CV for that task. Position errors are 2-D distances in units (Web Mercator metres).
 
-**Building**
+| Model | Building accuracy | Floor accuracy | Floor macro-F1 | Position mean | Position median | Position 90th pct |
+|---|---|---|---|---|---|---|
+| Majority class / mean position (baseline) | 0.2412 | 0.1548 | 0.0536 | 142.75 | 167.37 | 217.10 |
+| kNN (baseline; k = 1 for building and floor, k = 4 for position) | 0.9973 | 0.8965 | 0.8960 | **8.72** | **5.43** | **18.76** |
+| Random Forest | 0.9982 | 0.9091 | 0.8962 | 10.43 | 7.65 | 22.38 |
+| XGBoost (tuned) | **0.9991** | 0.9037 | 0.8917 | not trained | not trained | not trained |
+| Keras MLP | 1.0000 | **0.9190** | **0.9100** | 11.76 | 9.45 | 22.60 |
 
-| Model | Test accuracy | Group-CV accuracy (train) |
-|---|---|---|
-| Majority class (baseline) | 0.2412 | 0.4721 |
-| kNN, k = 1 (baseline) | 0.9973 | 0.9979 |
-| Random Forest | 0.9982 | 0.9985 |
-| XGBoost (tuned) | 0.9991 | 0.9993 |
-| Keras MLP (selected by group CV) | 1.0000 | 0.9998 |
-
-**Floor**
-
-| Model | Test accuracy (floor hit rate) | Macro-F1 | Building and floor both correct | Group-CV accuracy (train) |
-|---|---|---|---|---|
-| Majority class (baseline) | 0.1548 | 0.0536 | 0.0360 | 0.2476 |
-| kNN, k = 1 (baseline) | 0.8965 | 0.8960 | 0.8965 | 0.9676 |
-| Random Forest | 0.9091 | 0.8962 | 0.9082 | 0.9724 |
-| XGBoost (tuned) | 0.9037 | 0.8917 | 0.9037 | 0.9733 |
-| Keras MLP (selected by group CV) | 0.9190 | 0.9100 | 0.9190 | 0.9816 |
-
-**Position** (error in metres, dataset units = Web Mercator metres)
-
-| Model | Mean | Median | 75th pct | 90th pct | Group-CV mean (train) |
-|---|---|---|---|---|---|
-| Mean position (baseline) | 142.75 | 167.37 | 193.37 | 217.10 | 129.98 |
-| **kNN, k = 4 (baseline) — final position model** | **8.72** | **5.43** | **10.46** | **18.76** | **8.45** |
-| Random Forest (auto-selected, non-baselines only) | 10.43 | 7.65 | 13.52 | 22.38 | 8.66 |
-| Keras MLP | 12.26 | 10.17 | 15.44 | 23.27 | 9.87 |
-
-**Position, ≈ ground metres** (dataset values ÷ 1.305, the scale factor printed by the notebook)
-
-| Model | Mean | Median | 75th pct | 90th pct | Group-CV mean (train) |
-|---|---|---|---|---|---|
-| Mean position (baseline) | ≈ 109.39 | ≈ 128.26 | ≈ 148.18 | ≈ 166.36 | ≈ 99.60 |
-| **kNN, k = 4 (baseline) — final position model** | **≈ 6.68** | **≈ 4.16** | **≈ 8.02** | **≈ 14.37** | **≈ 6.47** |
-| Random Forest | ≈ 7.99 | ≈ 5.86 | ≈ 10.36 | ≈ 17.15 | ≈ 6.64 |
-| Keras MLP | ≈ 9.39 | ≈ 7.79 | ≈ 11.83 | ≈ 17.83 | ≈ 7.56 |
-
-**The kNN baseline (k = 4) is the best position model**, both in group CV (8.45 m) and on the official validation set
-(mean 8.72 m, median 5.43 m), ahead of the Random Forest (10.43 m) and the Keras MLP (12.26 m). The notebook's automatic
-selection only compared non-baseline models, so it marked the Random Forest as "selected". I report kNN as the final
-position model.
-
-What I take from this:
-- Building prediction is basically solved by every model except the majority baseline.
-- For the floor, the models beat kNN by 0.7–2.3 percentage points. The Keras MLP is best (91.9%).
-- For position, the simple kNN baseline beat every more complex model (see above).
-- Test scores are lower than group-CV scores (for example, floor 0.98 → 0.92 for the MLP). The test data was recorded
-  about 4 months later, and signals change over time, which likely explains most of the gap.
-- XGBoost (tuned), which I focused on, was not better than the untuned Random Forest on this data.
-
-Best XGBoost settings from the random search (3-fold group CV):
-`n_estimators=291, max_depth=6, learning_rate=0.2799, subsample=0.9969, colsample_bytree=0.2124, min_child_weight=2`.
-Both XGBoost searches (building and floor) used the same random seed, so they share this best setting.
-
-### First version vs corrected version
-
-| Task, model | First version (course, 2025) | Corrected (official validation set) |
-|---|---|---|
-| Building, Random Forest | 0.9876 accuracy (random split) | 0.9982 accuracy |
-| Building, XGBoost | 0.9865 accuracy (random split, not tuned) | 0.9991 accuracy (tuned) |
-| Floor, Random Forest | 0.8108 accuracy (random split); 0.6710 in 5-fold CV | 0.9091 accuracy, macro-F1 0.8962 |
-| Floor, XGBoost | 0.8072 accuracy (random split); 0.6817 in 5-fold CV | 0.9037 accuracy, macro-F1 0.8917 |
-| Position, Random Forest | RMSE 0.53 m (lat) / 0.68 m (long): **invalid, leakage** | mean 2-D error 10.43 m (median 7.65 m) |
-| Position, Keras MLP | RMSE 8.32 m (lat) / 7.97 m (long): **invalid, leakage** | mean 2-D error 12.26 m (median 10.17 m) |
-
-**Different test sets — not a like-for-like comparison.** The first version was scored on a random 80/20 split of the
-training file; the corrected version on the official validation set, recorded about 4 months later.
-
-The first-version numbers are copied from the saved outputs of the course notebook. After the fixes, floor accuracy went
-from about 81% (on an easier random split) to about 90–92% on the harder, later test set. The main change is the
-"not detected" encoding. The best corrected position model, kNN (not in the first version), reaches a mean error of 8.72 m.
-
-## Figures
-
-Data overview (training file): scans per building and floor, where scans were taken, access points heard per scan, and reference points.
-
-![Data overview](figures/eda_overview.png)
-
-Floor confusion matrix of the selected model (Keras MLP) on the official validation set:
-
-![Floor confusion matrix](figures/floor_confusion_matrix.png)
-
-Position error, cumulative distribution on the official validation set:
-
-![Position error CDF](figures/position_error_cdf.png)
-
-All models vs baselines on the official validation set:
-
-![Model comparison](figures/model_comparison.png)
-
-Position errors in both figures are in dataset (Web Mercator) units.
-
-Cosmetic notes: Colab did not save execution counts in the notebook (the outputs are all there), and in `model_comparison.png`
-the value labels near 1.0 overlap the plot border. Neither affects any result.
+- kNN position error in ground metres: mean 6.68 m, median 4.16 m, 90th percentile 14.37 m.
+- With the usual penalty (4 units per wrong floor, 50 per wrong building, using the selected building and floor models), the kNN mean error is 9.12 units.
+- The building choice is a near tie in group CV (XGBoost and Keras MLP both 0.9994); the MLP then scored 1.0000 on test, but the choice was made before testing.
+- Floor accuracy by building (Keras MLP): 0.965 in building 0, 0.824 in building 1, 0.937 in building 2. The most common mistakes are in building 1: floor 1 predicted as floor 2 (27 scans) or floor 0 (15 scans).
+- Median kNN position error by building: 3.967, 6.786 and 7.524 units.
 
 ## Limitations
 
-- One campus and one data collection campaign; the results may not transfer to other buildings.
-- Different phones measure signal strength differently, and I did not correct for that.
-- WiFi signals change over time. The test data is only about 4 months newer than the training data.
-- Floor mistakes (Keras MLP) are concentrated in building 1. There, floor accuracy is 0.824, against 0.965 in building 0 and 0.937 in
-  building 2. The most common mistakes are floor 1 predicted as floor 2 (27 scans) or floor 0 (15 scans). 83 of the 90 wrong
-  floor predictions are off by one floor.
-- Position error grows from building 0 (median 5.95 m) to building 1 (8.86 m) and building 2 (12.39 m) for the Random Forest.
-- Errors are reported in Web Mercator units; ground metres are only approximate (÷ 1.305, see "How I evaluated").
-- A hierarchical model (building first, then floor, then position within that building) was not tried.
-- The notebook took 45.0 minutes on the free Colab CPU runtime, mostly the XGBoost random search.
-
-## What I learned
-
-- If a result looks too good, check the inputs first. Our 0.5 m error came from giving the model the answer.
-- Missing values are not always "unknown". Here, "not detected" is real information, and filling it with the average destroyed it.
-- How you split the data matters as much as the model. Random splits of repeated measurements overstate accuracy, and a
-  later, separate test set gives a more honest number.
-- A simple, well-tuned baseline can beat more complex models. kNN with k chosen by group CV was hard to beat for floor,
-  and for position it beat both the Random Forest and the neural network. Always include one.
+- One campus and one later test period. Results may not transfer to other buildings, and scores drop from group CV to the test file, likely from signal drift over time, a single collector for the test file, and 55 access points heard only in the test month.
+- One seed per model and no repeated runs, so no spread is reported; the floor gap between the Keras MLP and the Random Forest (0.9190 vs 0.9091) is small.
+- Errors are 2-D and in Web Mercator units; the ground-metre figures use the derived 1.305 scale factor. Building, floor and position are predicted by separate models, not one hierarchical model.
+- The tests cover the two helper modules only. CI does not run the notebook, which needs the download and took 14.6 minutes in the saved run.
 
 ## How to run
 
-**Google Colab.** [Open in Colab](https://colab.research.google.com/github/maryam843/wifi-indoor-localization-ujiindoorloc/blob/main/notebooks/02_corrected_version.ipynb),
-then Runtime → Run all. The notebook downloads the data from UCI. It takes about 45 minutes on the free Colab CPU
-(mostly the XGBoost search).
-
-**Locally** (Python 3.10–3.13):
+Python 3.12 or 3.13 (CI uses 3.12).
 
 ```bash
-python -m venv .venv
-.venv/Scripts/activate        # macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt jupyter
-jupyter notebook notebooks/02_corrected_version.ipynb
+git clone https://github.com/maryam843/wifi-indoor-localization-ujiindoorloc.git
+cd wifi-indoor-localization-ujiindoorloc
+python3.12 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt -r requirements-dev.txt jupyter nbconvert
+```
+
+Run the whole pipeline (downloads the data, trains, tests once, writes the figures and the fold table):
+
+```bash
+cd notebooks
+jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=3600 wifi_indoor_localization.ipynb
+```
+
+Tests and lint, as in CI (from the repo root):
+
+```bash
+ruff check .
+pytest -v
 ```
 
 ## Repo structure
 
+```text
+notebooks/wifi_indoor_localization.ipynb   full pipeline: data, group CV, models, final test, figures, error analysis
+src/encoding.py                            "not detected" encoding and 0 to 1 signal scaling
+src/folds.py                               StableGroupKFold: the same group folds on every machine
+tests/                                     11 pytest tests for the two modules
+results/group_folds.csv                    735 location groups and their fold in the 5-fold and 3-fold splits
+figures/                                   4 figures written by the notebook
+data/README.md                             download steps, file schema, licence and citation (CSVs not committed)
+.github/workflows/ci.yml                   CI: ruff lint and pytest on Python 3.12
+pyproject.toml                             pytest and ruff settings
+requirements.txt, requirements-dev.txt     pinned libraries and test tools
 ```
-README.md
-LICENSE
-requirements.txt
-data/README.md                           download steps and citation (CSV files are not committed)
-figures/                                 figures produced by the corrected notebook
-notebooks/01_original_course_version.ipynb   course version (2025), kept for transparency, not re-run
-notebooks/02_corrected_version.ipynb         corrected version (2026), executed in Google Colab
-```
 
-## Credits and licence
+## Licence and credits
 
-A two-person course project for DSAI3201 Machine Learning, UDST, Winter 2025. The corrected 2026 version was done by one
-member of the team.
+Code: MIT licence, see [LICENSE](LICENSE).
 
-Dataset: UJIIndoorLoc by Torres-Sospedra et al. (2014), CC BY 4.0, via the UCI Machine Learning Repository. It is not redistributed here.
+Dataset: UJIIndoorLoc, CC BY 4.0, via the UCI Machine Learning Repository (dataset DOI 10.24432/C5MS59). It is not redistributed here.
 
-Code: MIT licence (see [LICENSE](LICENSE)).
+Torres-Sospedra, J., Montoliu, R., Martínez-Usó, A., Avariento, J. P., Arnau, T. J., Benedito-Bordonau, M., & Huerta, J. (2014).
+UJIIndoorLoc: A new multi-building and multi-floor database for WLAN fingerprint-based indoor localization problems.
+*2014 International Conference on Indoor Positioning and Indoor Navigation (IPIN)*, 261-270. DOI 10.1109/IPIN.2014.7275492.
